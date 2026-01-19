@@ -12,7 +12,7 @@ export interface ChunkData {
   position: { x: number; z: number };
 }
 
-export class ChunkManager {
+  export class ChunkManager {
   private scene: THREE.Scene;
   private chunks: Map<string, ChunkData>;
   private blockGeometries: Map<BlockType, THREE.BoxGeometry>;
@@ -24,15 +24,6 @@ export class ChunkManager {
     blocksPlaced: 0,
     blocksBroken: 0,
   };
-
-  constructor(scene: THREE.Scene) {
-    this.scene = scene;
-    this.chunks = new Map();
-    this.geometry = new THREE.BoxGeometry(1, 1, 1);
-    this.createMaterials();
-    this.createBlockGeometries();
-    this.generateInitialWorld();
-  }
 
   private createMaterials() {
     this.blockMaterials = new Map();
