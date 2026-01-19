@@ -344,6 +344,33 @@ export interface ChunkData {
         this.chunks.delete(key);
       }
     }
+
+    return { ...this.worldStats };
+  }
+        }
+      }
+
+      const keysToDelete: string[] = [];
+
+      this.chunks.forEach((chunk, key) => {
+        const [kx, kz] = key.split(',').map(Number);
+        const dist = Math.max(Math.abs(kx - cx), Math.abs(kz - cz));
+
+        if (dist > renderDist + 1) {
+          keysToDelete.push(key);
+        }
+      });
+
+      for (const key of keysToDelete) {
+        const chunk = this.chunks.get(key);
+
+        if (chunk && chunk.mesh) {
+          this.scene.remove(chunk.mesh);
+        }
+
+        this.chunks.delete(key);
+      }
+    }
   }
 
   getStats(): WorldStats {
