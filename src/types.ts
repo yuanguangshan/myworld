@@ -19,6 +19,11 @@ export interface BlockColor {
   bottom: number;
 }
 
+export interface WorldStats {
+  blocksPlaced: number;
+  blocksBroken: number;
+}
+
 export interface PlayerState {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number };
@@ -52,4 +57,5 @@ export const BLOCK_SIZE = 1;
 export const GRAVITY = -30;
 export const JUMP_FORCE = 10;
 export const MOVE_SPEED = 5;
+export const RUN_MULTIPLIER = 1.5;
 export const MOUSE_SENSITIVITY = 0.002;

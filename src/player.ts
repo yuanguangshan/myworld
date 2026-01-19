@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GRAVITY, JUMP_FORCE, MOVE_SPEED, MOUSE_SENSITIVITY, PlayerState } from './types';
+import { GRAVITY, JUMP_FORCE, MOVE_SPEED, MOUSE_SENSITIVITY, PlayerState, RUN_MULTIPLIER } from './types';
 
 export class Player {
   private camera: THREE.PerspectiveCamera;
@@ -85,12 +85,18 @@ export class Player {
     return direction;
   }
 
+  getCurrentSpeed(): number {
+    const isSprinting = this.keys.get('ShiftLeft') || this.keys.get('ShiftRight');
+    return isSprinting ? MOVE_SPEED * RUN_MULTIPLIER : MOVE_SPEED;
+  }
+
   update(delta: number, world: any) {
     this.state.velocity.y += GRAVITY * delta;
 
     const direction = this.getDirection();
-    this.state.velocity.x = direction.x * MOVE_SPEED;
-    this.state.velocity.z = direction.z * MOVE_SPEED;
+    const speed = this.getCurrentSpeed();
+    this.state.velocity.x = direction.x * speed;
+    this.state.velocity.z = direction.z * speed;
 
     const newX = this.state.position.x + this.state.velocity.x * delta;
     const newY = this.state.position.y + this.state.velocity.y * delta;

@@ -1,13 +1,13 @@
 import * as THREE from 'three';
-import { World } from './world';
+import { Game as Game } from './chunkManager';
 import { Player } from './player';
-import { BLOCK_NAMES, BlockType } from './types';
+import { BLOCK_NAMES, BlockType, WORLD_SIZE } from './types';
 
-export class Game {
+export class MyWorldGame {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
-  private world: World;
+  private chunkManager: Game;
   private player: Player;
   private raycaster: THREE.Raycaster;
   private selectedBlock: BlockType = 'grass';
@@ -15,8 +15,10 @@ export class Game {
   private lastTime: number = 0;
   private frameCount: number = 0;
   private lastFpsUpdate: number = 0;
-  private selectedSlot: number = 0;
-  private blockTypes: BlockType[] = ['grass', 'dirt', 'stone', 'wood', 'leaves', 'sand'];
+  private stats: WorldStats = {
+    blocksPlaced: 0,
+    blocksBroken: 0
+  };
 
   constructor() {
     this.init();
@@ -27,7 +29,7 @@ export class Game {
   private init() {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87CEEB);
-    this.scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+    this.scene.fog = new THREE.Fog(0x87CEEB, 50, WORLD_SIZE * 2);
 
     this.camera = new THREE.PerspectiveCamera(
       75,
@@ -36,13 +38,13 @@ export class Game {
       1000
     );
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: false });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.getElementById('game-container')?.appendChild(this.renderer.domElement);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     this.scene.add(ambientLight);
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -52,50 +54,27 @@ export class Game {
     directionalLight.shadow.mapSize.height = 2048;
     directionalLight.shadow.camera.near = 0.5;
     directionalLight.shadow.camera.far = 500;
-    directionalLight.shadow.camera.left = -50;
-    directionalLight.shadow.camera.right = 50;
-    directionalLight.shadow.camera.top = 50;
-    directionalLight.shadow.camera.bottom = -50;
+    directionalLight.shadow.camera.left = -WORLD_SIZE;
+    directionalLight.shadow.camera.right = WORLD_SIZE;
+    directionalLight.shadow.camera.top = WORLD_SIZE;
+    directionalLight.shadow.camera.bottom = -WORLD_SIZE;
     this.scene.add(directionalLight);
 
-    this.world = new World(this.scene);
+    this.chunkManager = new Game(this.scene);
 
-    this.player = new Player(this.camera, { x: 0, y: 15, z: 0 });
+    this.player = new Player(this.camera, { x: 0, y: 50, z: 0 });
 
     this.raycaster = new THREE.Raycaster();
     this.raycaster.far = 6;
 
     window.addEventListener('resize', () => this.onWindowResize());
     document.addEventListener('mousedown', (e) => this.onMouseDown(e));
-    document.addEventListener('wheel', (e) => this.onMouseWheel(e));
-    document.addEventListener('keydown', (e) => this.onKeyDown(e));
 
     const loading = document.getElementById('loading');
     if (loading) loading.style.display = 'none';
   }
 
   private setupUI() {
-    const selector = document.getElementById('block-selector');
-    if (selector) {
-      selector.innerHTML = '';
-      this.blockTypes.forEach((type, index) => {
-        const slot = document.createElement('div');
-        slot.className = 'block-slot' + (index === 0 ? ' selected' : '');
-        slot.dataset.block = type;
-        slot.innerHTML = `<span style="color: ${
-          type === 'grass' ? '#7CFC00' :
-          type === 'dirt' ? '#8B4513' :
-          type === 'stone' ? '#808080' :
-          type === 'wood' ? '#8B6914' :
-          type === 'leaves' ? '#228B22' :
-          type === 'sand' ? '#F4A460' : '#FFFFFF'
-        };">${index + 1}</span>`;
-        slot.title = BLOCK_NAMES[type];
-        slot.addEventListener('click', () => this.selectBlock(index));
-        selector.appendChild(slot);
-      });
-    }
-
     const startBtn = document.getElementById('start-btn');
     if (startBtn) {
       startBtn.addEventListener('click', () => {
@@ -107,27 +86,17 @@ export class Game {
     }
   }
 
-  private selectBlock(index: number) {
-    this.selectedSlot = index;
-    this.selectedBlock = this.blockTypes[index];
-
-    const slots = document.querySelectorAll('.block-slot');
-    slots.forEach((slot, i) => {
-      slot.classList.toggle('selected', i === index);
-    });
-  }
-
   private onMouseDown(e: MouseEvent) {
     if (!this.isRunning) return;
 
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
-    const target = this.world.getRaycastTarget(this.camera, this.raycaster);
+    const target = this.chunkManager.getRaycastTarget(this.camera, this.raycaster);
 
     if (target) {
       const { block, face } = target;
 
       if (e.button === 0) {
-        this.world.removeBlock(block.x, block.y, block.z);
+        this.chunkManager.removeBlock(block.x, block.y, block.z);
       } else if (e.button === 2) {
         const newX = block.x + Math.round(face.x);
         const newY = block.y + Math.round(face.y);
@@ -136,35 +105,14 @@ export class Game {
         const playerPos = this.player.getPosition();
         const distance = Math.sqrt(
           Math.pow(newX - playerPos.x, 2) +
-          Math.pow(newY - (playerPos.y + 0.9), 2) +
-          Math.pow(newZ - playerPos.z, 2)
+            Math.pow(newY - (playerPos.y + 0.9), 2) +
+            Math.pow(newZ - playerPos.z, 2)
         );
 
         if (distance > 1.5) {
-          this.world.addBlock(newX, newY, newZ, this.selectedBlock);
+          this.chunkManager.addBlock(newX, newY, newZ, this.selectedBlock);
         }
       }
-    }
-  }
-
-  private onMouseWheel(e: WheelEvent) {
-    if (!this.isRunning) return;
-
-    const delta = Math.sign(e.deltaY);
-    let newIndex = this.selectedSlot + delta;
-
-    if (newIndex < 0) newIndex = this.blockTypes.length - 1;
-    if (newIndex >= this.blockTypes.length) newIndex = 0;
-
-    this.selectBlock(newIndex);
-  }
-
-  private onKeyDown(e: KeyboardEvent) {
-    if (!this.isRunning) return;
-
-    const keyNum = parseInt(e.key);
-    if (!isNaN(keyNum) && keyNum >= 1 && keyNum <= this.blockTypes.length) {
-      this.selectBlock(keyNum - 1);
     }
   }
 
@@ -176,6 +124,7 @@ export class Game {
 
   private updateUI(delta: number) {
     this.frameCount++;
+
     if (performance.now() - this.lastFpsUpdate >= 1000) {
       const fps = this.frameCount;
       const fpsElement = document.getElementById('fps');
@@ -186,9 +135,15 @@ export class Game {
     }
 
     const pos = this.player.getPosition();
+    const stats = this.chunkManager.getStats();
     const posElement = document.getElementById('position');
     if (posElement) {
-      posElement.textContent = `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`;
+      posElement.textContent = `X: ${Math.floor(pos.x)} Y: ${Math.floor(pos.y)} Z: ${Math.floor(pos.z)}`;
+    }
+
+    const statsElement = document.getElementById('stats');
+    if (statsElement) {
+      statsElement.innerHTML = `Placed: ${stats.blocksPlaced} | Broken: ${stats.blocksBroken}`;
     }
   }
 
@@ -200,7 +155,8 @@ export class Game {
     this.lastTime = currentTime;
 
     if (this.isRunning) {
-      this.player.update(delta, this.world);
+      this.player.update(delta, this.chunkManager);
+      this.chunkManager.update(this.player.getPosition());
     }
 
     this.renderer.render(this.scene, this.camera);
@@ -208,4 +164,4 @@ export class Game {
   }
 }
 
-new Game();
+new MyWorldGame();
