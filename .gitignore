@@ -1,2 +1,4 @@
 node_modules
 src/chunkManager.ts
+.ai/context.json
+.weaver/evidence.log

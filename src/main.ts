@@ -156,7 +156,8 @@ export class MyWorldGame {
 
     if (this.isRunning) {
       this.player.update(delta, this.chunkManager);
-      this.chunkManager.update(this.player.getPosition());
+      const { x, z } = this.player.getPosition();
+      this.chunkManager.update({ x, z });
     }
 
     this.renderer.render(this.scene, this.camera);

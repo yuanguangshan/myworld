@@ -1,381 +1,259 @@
 import * as THREE from 'three';
-import { BLOCK_COLORS, Block, BlockType, WorldStats, CHUNK_SIZE } from './types';
+import { BlockType, WORLD_SIZE, BLOCK_COLORS, WorldStats } from './types';
 
-export interface ChunkKey {
-  x: number;
-  z: number;
-}
-
-export interface ChunkData {
-  blocks: Map<string, Block>;
-  mesh?: THREE.Object3D;
-  position: { x: number; z: number };
+interface ChunkData {
+  blocks: Map<string, { type: BlockType; position: THREE.Vector3 }>;
+  mesh: THREE.Group;
+  blockGeometries: Map<BlockType, THREE.InstancedMesh>;
 }
 
 export class Game {
-  private scene: THREE.Scene;
   private chunks: Map<string, ChunkData> = new Map();
-  private blockGeometries: Map<BlockType, THREE.BoxGeometry> = new Map();
-  private blockMaterials: Map<BlockType, THREE.Material[]> = new Map();
-  private lastChunkX: number = 0;
-  private lastChunkZ: number = 0;
-  private geometry: THREE.BoxGeometry = new THREE.BoxGeometry(1, 1, 1);
-  private worldStats: WorldStats = {
+  private scene: THREE.Scene;
+  private renderDistance: number = 3;
+  private stats: WorldStats = {
     blocksPlaced: 0,
-    blocksBroken: 0,
+    blocksBroken: 0
   };
+  private raycastMeshes: THREE.InstancedMesh[] = []; // 用于raycast的缓存
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.createMaterials();
-    this.createBlockGeometries();
   }
 
-  private createMaterials() {
-    this.blockMaterials = new Map();
+  private getChunkKey(x: number, z: number): string {
+    const chunkX = Math.floor(x / 16);
+    const chunkZ = Math.floor(z / 16);
+    return `${chunkX},${chunkZ}`;
+  }
 
-    for (const [blockType, colors] of Object.entries(BLOCK_COLORS)) {
-      const materials = [
-        new THREE.MeshLambertMaterial({ color: colors.side }),
-        new THREE.MeshLambertMaterial({ color: colors.side }),
-        new THREE.MeshLambertMaterial({ color: colors.top }),
-        new THREE.MeshLambertMaterial({ color: colors.bottom }),
-        new THREE.MeshLambertMaterial({ color: colors.side }),
-        new THREE.MeshLambertMaterial({ color: colors.side }),
-      ];
-      this.blockMaterials.set(blockType as BlockType, materials);
+  private getBlockKey(x: number, y: number, z: number): string {
+    return `${x},${y},${z}`;
+  }
+
+  private getBlockAt(x: number, y: number, z: number): BlockType | null {
+    const chunkKey = this.getChunkKey(x, z);
+    const chunk = this.chunks.get(chunkKey);
+    
+    if (!chunk) return null;
+    
+    const blockKey = this.getBlockKey(x, y, z);
+    const block = chunk.blocks.get(blockKey);
+    
+    return block ? block.type : null;
+  }
+
+  private getOrCreateChunk(chunkX: number, chunkZ: number): ChunkData {
+    const chunkKey = `${chunkX},${chunkZ}`;
+    
+    if (this.chunks.has(chunkKey)) {
+      return this.chunks.get(chunkKey)!;
     }
+    
+    const chunk: ChunkData = {
+      blocks: new Map(),
+      mesh: new THREE.Group(),
+      blockGeometries: new Map()
+    };
+    
+    this.chunks.set(chunkKey, chunk);
+    this.scene.add(chunk.mesh);
+    
+    return chunk;
   }
 
-  private createBlockGeometries() {
-    this.blockGeometries = new Map();
+  private rebuildChunkMesh(chunk: ChunkData) {
+    // 清除现有的instanced meshes
+    chunk.mesh.clear();
 
-    const blockTypes: BlockType[] = ['grass', 'dirt', 'stone', 'wood', 'leaves', 'sand'];
-
-    for (const type of blockTypes) {
-      const geo = new THREE.BoxGeometry(1, 1, 1);
-      this.blockGeometries.set(type, geo);
+    // 从raycastMeshes中移除旧的mesh
+    for (const mesh of chunk.blockGeometries.values()) {
+      const index = this.raycastMeshes.indexOf(mesh);
+      if (index !== -1) {
+        this.raycastMeshes.splice(index, 1);
+      }
+      mesh.removeFromParent();
     }
-  }
+    chunk.blockGeometries.clear();
 
-  private getChunkKey(cx: number, cz: number): string {
-    return `${cx},${cz}`;
-  }
+    // 按block type分组
+    const blocksByType: Record<BlockType, Array<{x: number, y: number, z: number}>> = {
+      grass: [],
+      dirt: [],
+      stone: [],
+      wood: [],
+      leaves: [],
+      sand: [],
+      water: []
+    };
 
-  getChunkData(worldX: number, worldZ: number): ChunkData | null {
-    const cx = Math.floor(worldX / CHUNK_SIZE);
-    const cz = Math.floor(worldZ / CHUNK_SIZE);
-    const key = this.getChunkKey(cx, cz);
+    chunk.blocks.forEach((block, key) => {
+      const [x, y, z] = key.split(',').map(Number);
+      blocksByType[block.type].push({x, y, z});
+    });
 
-    if (!this.chunks.has(key)) {
-      return null;
-    }
+    // 为每种block type创建instanced mesh
+    Object.entries(blocksByType).forEach(([type, positions]) => {
+      if (positions.length === 0) return;
 
-    return this.chunks.get(key) || null;
+      const blockType = type as BlockType;
+      const geometry = new THREE.BoxGeometry(1, 1, 1);
+      const material = new THREE.MeshLambertMaterial({
+        color: BLOCK_COLORS[blockType].side,
+        vertexColors: true
+      });
+
+      const instancedMesh = new THREE.InstancedMesh(geometry, material, positions.length);
+      instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // 优化更新
+
+      positions.forEach((pos, index) => {
+        const matrix = new THREE.Matrix4();
+        matrix.setPosition(pos.x, pos.y, pos.z);
+        instancedMesh.setMatrixAt(index, matrix);
+      });
+
+      instancedMesh.count = positions.length;
+      instancedMesh.instanceMatrix.needsUpdate = true;
+
+      chunk.blockGeometries.set(blockType, instancedMesh);
+      chunk.mesh.add(instancedMesh);
+      this.raycastMeshes.push(instancedMesh); // 添加到raycast缓存
+
+      geometry.dispose(); // 立即释放临时几何体
+    });
   }
 
   addBlock(x: number, y: number, z: number, type: BlockType) {
-    const cx = Math.floor(x / CHUNK_SIZE);
-    const cz = Math.floor(z / CHUNK_SIZE);
-    const key = this.getChunkKey(cx, cz);
-
-    let chunkData = this.chunks.get(key);
-
-    if (!chunkData) {
-      chunkData = {
-        blocks: new Map(),
-        position: { x: cx * CHUNK_SIZE, z: cz * CHUNK_SIZE },
-      };
-      this.chunks.set(key, chunkData);
-    }
-
-    const blockKey = `${x},${y},${z}`;
-    chunkData.blocks.set(blockKey, { x, y, z, type });
-    this.worldStats.blocksPlaced++;
-
-    this.rebuildChunkMesh(cx, cz);
-    this.updateNeighborChunks(cx, cz);
-  }
-
-  removeBlock(x: number, y: number, z: number): boolean {
-    const cx = Math.floor(x / CHUNK_SIZE);
-    const cz = Math.floor(z / CHUNK_SIZE);
-    const key = this.getChunkKey(cx, cz);
-    const blockKey = `${x},${y},${z}`;
-
-    const chunkData = this.chunks.get(key);
-
-    if (!chunkData || !chunkData.blocks.has(blockKey)) {
-      return false;
-    }
-
-    chunkData.blocks.delete(blockKey);
-    this.worldStats.blocksBroken++;
-
-    this.rebuildChunkMesh(cx, cz);
-    this.updateNeighborChunks(cx, cz);
-
-    return true;
-  }
-
-  private rebuildChunkMesh(cx: number, cz: number) {
-    const key = this.getChunkKey(cx, cz);
-    const chunkData = this.chunks.get(key);
-
-    if (!chunkData) {
-      return;
-    }
-
-    if (chunkData.mesh) {
-      this.scene.remove(chunkData.mesh);
-    }
-
-    const instancesByType = new Map<BlockType, { count: number; matrices: THREE.Matrix4[] }>();
-
-    for (const [_, block] of chunkData.blocks) {
-      if (!instancesByType.has(block.type)) {
-        instancesByType.set(block.type, { count: 0, matrices: [] });
-      }
-
-      const instanceData = instancesByType.get(block.type)!;
-      instanceData.count++;
-      instanceData.matrices.push(new THREE.Matrix4().makeTranslation(block.x, block.y, block.z));
-    }
-
-    const group = new THREE.Group();
-
-    for (const [blockType, data] of instancesByType) {
-      if (data.count === 0) continue;
-
-      const geometry = this.blockGeometries.get(blockType);
-      const materials = this.blockMaterials.get(blockType);
-
-      if (!geometry || !materials) continue;
-
-      const instancedMesh = new THREE.InstancedMesh(geometry, materials, data.count);
-
-      for (let i = 0; i < data.count; i++) {
-        instancedMesh.setMatrixAt(i, data.matrices[i]);
-      }
-
-      instancedMesh.instanceMatrix.needsUpdate = true;
-      instancedMesh.castShadow = true;
-      instancedMesh.receiveShadow = true;
-
-      group.add(instancedMesh);
-    }
-
-    this.scene.add(group);
-    chunkData.mesh = group;
-  }
-
-  private updateNeighborChunks(cx: number, cz: number) {
-    const directions = [
-      [1, 0], [-1, 0], [0, 1], [0, -1],
-    ];
-
-    for (const [dx, dz] of directions) {
-      const neighborKey = this.getChunkKey(cx + dx, cz + dz);
-
-      if (this.chunks.has(neighborKey)) {
-        this.rebuildChunkMesh(cx + dx, cz + dz);
-      }
+    const chunk = this.getOrCreateChunk(Math.floor(x / 16), Math.floor(z / 16));
+    
+    const blockKey = this.getBlockKey(x, y, z);
+    if (!chunk.blocks.has(blockKey)) {
+      chunk.blocks.set(blockKey, { type, position: new THREE.Vector3(x, y, z) });
+      this.rebuildChunkMesh(chunk);
+      this.stats.blocksPlaced++;
     }
   }
 
-  private generateChunk(cx: number, cz: number) {
-    const key = this.getChunkKey(cx, cz);
-    const chunkData: ChunkData = {
-      blocks: new Map(),
-      position: { x: cx * CHUNK_SIZE, z: cz * CHUNK_SIZE },
-    };
-
-    const offsetX = cx * CHUNK_SIZE;
-    const offsetZ = cz * CHUNK_SIZE;
-
-    for (let x = 0; x < CHUNK_SIZE; x++) {
-      for (let z = 0; z < CHUNK_SIZE; z++) {
-        const wx = offsetX + x;
-        const wz = offsetZ + z;
-
-        const height = Math.floor(
-          Math.sin(wx * 0.05) * 3 +
-          Math.cos(wz * 0.05) * 3 +
-          Math.sin(wx * 0.03 + wz * 0.03) * 5 + 5
-        );
-
-        for (let y = 0; y <= height; y++) {
-          let blockType: BlockType;
-
-          if (y === height) {
-            blockType = 'grass';
-          } else if (y > height - 3) {
-            blockType = 'dirt';
-          } else {
-            blockType = 'stone';
-          }
-
-          chunkData.blocks.set(`${wx},${y},${wz}`, { x: wx, y, z: wz, type: blockType });
-        }
-
-        if (x % 8 === 0 && z % 8 === 0 && Math.random() > 0.7) {
-          this.generateTree(chunkData, wx, height + 1, wz);
-        }
-      }
-    }
-
-    this.chunks.set(key, chunkData);
-    this.rebuildChunkMesh(cx, cz);
-  }
-
-  private generateTree(chunkData: ChunkData, x: number, y: number, z: number) {
-    for (let i = 0; i < 4; i++) {
-      chunkData.blocks.set(`${x},${y + i},${z}`, { x, y: y + i, z, type: 'wood' });
-    }
-
-    for (let dx = -2; dx <= 2; dx++) {
-      for (let dz = -2; dz <= 2; dz++) {
-        for (let dy = 0; dy <= 2; dy++) {
-          if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
-          if (dy === 2 && (Math.abs(dx) > 1 || Math.abs(dz) > 1)) continue;
-          if (dx === 0 && dz === 0 && dy < 2) continue;
-
-          chunkData.blocks.set(`${x + dx},${y + 4 + dy},${z + dz}`, {
-            x: x + dx,
-            y: y + 4 + dy,
-            z: z + dz,
-            type: 'leaves',
-          });
-        }
-      }
+  removeBlock(x: number, y: number, z: number) {
+    const chunkKey = this.getChunkKey(x, z);
+    const chunk = this.chunks.get(chunkKey);
+    
+    if (!chunk) return;
+    
+    const blockKey = this.getBlockKey(x, y, z);
+    if (chunk.blocks.has(blockKey)) {
+      chunk.blocks.delete(blockKey);
+      this.rebuildChunkMesh(chunk);
+      this.stats.blocksBroken++;
     }
   }
 
-  getBlockAt(x: number, y: number, z: number): Block | null {
-    const cx = Math.floor(x / CHUNK_SIZE);
-    const cz = Math.floor(z / CHUNK_SIZE);
-    const key = this.getChunkKey(cx, cz);
-
-    const chunkData = this.chunks.get(key);
-
-    if (!chunkData) {
-      return null;
-    }
-
-    const blockKey = `${x},${y},${z}`;
-    return chunkData.blocks.get(blockKey) || null;
-  }
-
-  getRaycastTarget(raycaster: THREE.Raycaster): { block: Block; face: THREE.Vector3 } | null {
-    const allMeshes: THREE.InstancedMesh[] = [];
-
-    for (const [_, chunk] of this.chunks) {
-      if (chunk.mesh) {
-        allMeshes.push(...chunk.mesh.children as THREE.InstancedMesh[]);
-      }
-    }
-
-    const intersects = raycaster.intersectObjects(allMeshes);
+  getRaycastTarget(raycaster: THREE.Raycaster) {
+    // 使用缓存的mesh进行raycasting，提高性能
+    const intersects = raycaster.intersectObjects(this.raycastMeshes, true);
 
     if (intersects.length > 0) {
-      const hit = intersects[0];
-      const matrix = new THREE.Matrix4();
+      const intersect = intersects[0];
 
-      const instancedMesh = hit.object as THREE.InstancedMesh;
-      const instanceId = hit.instanceId || 0;
-      instancedMesh.getMatrixAt(instanceId, matrix);
+      // 计算被击中的方块坐标
+      // 通过交点位置近似计算方块坐标
+      const blockX = Math.floor(intersect.point.x);
+      const blockY = Math.floor(intersect.point.y);
+      const blockZ = Math.floor(intersect.point.z);
 
-      const position = new THREE.Vector3();
-      position.setFromMatrixPosition(matrix);
+      // 使用射线方向而不是面法线来确定放置方向
+      // 这解决了AI提到的InstancedMesh face.normal不可靠的问题
+      const normal = raycaster.ray.direction.clone().multiplyScalar(-1).round();
 
-      const chunkData = this.getChunkData(position.x, position.z);
-
-      if (chunkData) {
-        const blockKey = `${Math.round(position.x)},${Math.round(position.y)},${Math.round(position.z)}`;
-        const actualBlock = chunkData.blocks.get(blockKey);
-        if (actualBlock) {
-          return {
-            block: {
-              x: Math.round(position.x),
-              y: Math.round(position.y),
-              z: Math.round(position.z),
-              type: actualBlock.type,
-            },
-            face: hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0),
-          };
-        }
-      }
-
-      return null;
+      return {
+        block: { x: blockX, y: blockY, z: blockZ },
+        face: normal
+      };
     }
+
     return null;
   }
 
   update(playerPosition: { x: number; z: number }) {
-    const cx = Math.floor(playerPosition.x / CHUNK_SIZE);
-    const cz = Math.floor(playerPosition.z / CHUNK_SIZE);
+    // 根据玩家位置更新可见区块
+    const playerChunkX = Math.floor(playerPosition.x / 16);
+    const playerChunkZ = Math.floor(playerPosition.z / 16);
 
-    if (cx !== this.lastChunkX || cz !== this.lastChunkZ) {
-      this.lastChunkX = cx;
-      this.lastChunkZ = cz;
-
-      const renderDist = 3;
-
-      for (let dx = -renderDist; dx <= renderDist; dx++) {
-        for (let dz = -renderDist; dz <= renderDist; dz++) {
-          const key = this.getChunkKey(cx + dx, cz + dz);
-
-          if (!this.chunks.has(key)) {
-            this.generateChunk(cx + dx, cz + dz);
-          }
+    // 添加需要的区块
+    for (let x = playerChunkX - this.renderDistance; x <= playerChunkX + this.renderDistance; x++) {
+      for (let z = playerChunkZ - this.renderDistance; z <= playerChunkZ + this.renderDistance; z++) {
+        const chunkKey = `${x},${z}`;
+        if (!this.chunks.has(chunkKey)) {
+          this.getOrCreateChunk(x, z);
+          
+          // 为新区块生成一些示例地形
+          this.generateTerrain(x, z);
         }
-      }
-
-      const keysToDelete: string[] = [];
-
-      this.chunks.forEach((_, key) => {
-        const [kx, kz] = key.split(',').map(Number);
-        const dist = Math.max(Math.abs(kx - cx), Math.abs(kz - cz));
-
-        if (dist > renderDist + 1) {
-          keysToDelete.push(key);
-        }
-      });
-
-      for (const key of keysToDelete) {
-        const chunk = this.chunks.get(key);
-
-        if (chunk && chunk.mesh) {
-          this.scene.remove(chunk.mesh);
-        }
-
-        this.chunks.delete(key);
       }
     }
 
-    return { ...this.worldStats };
+    // 移除不需要的区块
+    for (const [chunkKey, chunk] of this.chunks) {
+      const [chunkX, chunkZ] = chunkKey.split(',').map(Number);
+      const distance = Math.max(
+        Math.abs(chunkX - playerChunkX),
+        Math.abs(chunkZ - playerChunkZ)
+      );
+      
+      if (distance > this.renderDistance + 1) {
+        // 从场景中移除
+        this.scene.remove(chunk.mesh);
+        
+        // 清理内存
+        chunk.blockGeometries.forEach(mesh => {
+          mesh.geometry.dispose();
+          (mesh.material as THREE.Material).dispose();
+        });
+        
+        // 从chunks map中删除
+        this.chunks.delete(chunkKey);
+      }
+    }
+  }
+
+  private generateTerrain(chunkX: number, chunkZ: number) {
+    const chunk = this.getOrCreateChunk(chunkX, chunkZ);
+    
+    // 生成简单的地形
+    for (let x = chunkX * 16; x < (chunkX + 1) * 16; x++) {
+      for (let z = chunkZ * 16; z < (chunkZ + 1) * 16; z++) {
+        // 地面高度（简单噪声）
+        const height = Math.floor(Math.sin(x * 0.1) * Math.cos(z * 0.1) * 3 + 5);
+        
+        // 放置地面层
+        this.addBlock(x, height, z, 'grass');
+        for (let y = height - 1; y > height - 4; y--) {
+          if (y >= 0) this.addBlock(x, y, z, 'dirt');
+        }
+        
+        // 放置基岩层
+        this.addBlock(x, 0, z, 'stone');
+      }
+    }
   }
 
   getStats(): WorldStats {
-    return { ...this.worldStats };
+    return { ...this.stats };
   }
 
   dispose() {
-    this.blockMaterials.forEach((materials) => {
-      materials.forEach((material) => material.dispose());
-    });
+    // 清理所有资源
+    for (const chunk of this.chunks.values()) {
+      this.scene.remove(chunk.mesh);
 
-    this.blockGeometries.forEach((geometry) => {
-      geometry.dispose();
-    });
-
-    this.geometry.dispose();
-
-    for (const [_, chunk] of this.chunks) {
-      if (chunk.mesh) {
-        this.scene.remove(chunk.mesh);
-      }
+      chunk.blockGeometries.forEach(mesh => {
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+      });
     }
+
+    // 清理raycast mesh缓存
+    this.raycastMeshes = [];
 
     this.chunks.clear();
   }
