@@ -1,7 +1,0 @@
-{
-  "name": "VoxelCraft AI",
-  "description": "An advanced Minecraft-style 3D voxel game enhanced with Gemini AI for world inspiration analysis and procedural concept art generation.",
-  "requestFramePermissions": [
-    "camera"
-  ]
-}
