@@ -5,6 +5,7 @@ interface ChunkData {
   blocks: Map<string, { type: BlockType; position: THREE.Vector3 }>;
   mesh: THREE.Group;
   blockGeometries: Map<BlockType, THREE.InstancedMesh>;
+  geometries: Map<BlockType, THREE.BufferGeometry>; // 存储几何体以便正确释放
 }
 
 export class Game {
@@ -45,20 +46,21 @@ export class Game {
 
   private getOrCreateChunk(chunkX: number, chunkZ: number): ChunkData {
     const chunkKey = `${chunkX},${chunkZ}`;
-    
+
     if (this.chunks.has(chunkKey)) {
       return this.chunks.get(chunkKey)!;
     }
-    
+
     const chunk: ChunkData = {
       blocks: new Map(),
       mesh: new THREE.Group(),
-      blockGeometries: new Map()
+      blockGeometries: new Map(),
+      geometries: new Map()
     };
-    
+
     this.chunks.set(chunkKey, chunk);
     this.scene.add(chunk.mesh);
-    
+
     return chunk;
   }
 
@@ -74,7 +76,14 @@ export class Game {
       }
       mesh.removeFromParent();
     }
+
+    // 释放旧的几何体
+    for (const geometry of chunk.geometries.values()) {
+      geometry.dispose();
+    }
+
     chunk.blockGeometries.clear();
+    chunk.geometries.clear();
 
     // 按block type分组
     const blocksByType: Record<BlockType, Array<{x: number, y: number, z: number}>> = {
@@ -98,9 +107,12 @@ export class Game {
 
       const blockType = type as BlockType;
       const geometry = new THREE.BoxGeometry(1, 1, 1);
+      chunk.geometries.set(blockType, geometry); // 保存几何体引用
+
       const material = new THREE.MeshLambertMaterial({
         color: BLOCK_COLORS[blockType].side,
-        vertexColors: true
+        transparent: false,
+        side: THREE.FrontSide
       });
 
       const instancedMesh = new THREE.InstancedMesh(geometry, material, positions.length);
@@ -119,7 +131,7 @@ export class Game {
       chunk.mesh.add(instancedMesh);
       this.raycastMeshes.push(instancedMesh); // 添加到raycast缓存
 
-      geometry.dispose(); // 立即释放临时几何体
+      // 不要在这里释放几何体，因为InstancedMesh需要它
     });
   }
 
@@ -247,8 +259,12 @@ export class Game {
       this.scene.remove(chunk.mesh);
 
       chunk.blockGeometries.forEach(mesh => {
-        mesh.geometry.dispose();
         (mesh.material as THREE.Material).dispose();
+      });
+
+      // 释放几何体
+      chunk.geometries.forEach(geometry => {
+        geometry.dispose();
       });
     }
 
