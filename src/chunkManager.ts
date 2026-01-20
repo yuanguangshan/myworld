@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK_COLORS, Block, BlockType, Vector3Like, WorldStats, WORLD_SIZE } from './types';
+import { BLOCK_COLORS, Block, BlockType, WorldStats, CHUNK_SIZE } from './types';
 
 export interface ChunkKey {
   x: number;
@@ -8,22 +8,28 @@ export interface ChunkKey {
 
 export interface ChunkData {
   blocks: Map<string, Block>;
-  mesh?: THREE.InstancedMesh;
+  mesh?: THREE.Object3D;
   position: { x: number; z: number };
 }
 
-  export class ChunkManager {
+export class Game {
   private scene: THREE.Scene;
-  private chunks: Map<string, ChunkData>;
-  private blockGeometries: Map<BlockType, THREE.BoxGeometry>;
-  private blockMaterials: Map<BlockType, THREE.Material[]>;
+  private chunks: Map<string, ChunkData> = new Map();
+  private blockGeometries: Map<BlockType, THREE.BoxGeometry> = new Map();
+  private blockMaterials: Map<BlockType, THREE.Material[]> = new Map();
   private lastChunkX: number = 0;
   private lastChunkZ: number = 0;
-  private geometry: THREE.BoxGeometry;
+  private geometry: THREE.BoxGeometry = new THREE.BoxGeometry(1, 1, 1);
   private worldStats: WorldStats = {
     blocksPlaced: 0,
     blocksBroken: 0,
   };
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
+    this.createMaterials();
+    this.createBlockGeometries();
+  }
 
   private createMaterials() {
     this.blockMaterials = new Map();
@@ -160,7 +166,7 @@ export interface ChunkData {
     }
 
     this.scene.add(group);
-    chunkData.mesh = group as any;
+    chunkData.mesh = group;
   }
 
   private updateNeighborChunks(cx: number, cz: number) {
@@ -194,8 +200,8 @@ export interface ChunkData {
 
         const height = Math.floor(
           Math.sin(wx * 0.05) * 3 +
-            Math.cos(wz * 0.05) * 3 +
-            Math.sin(wx * 0.03 + wz * 0.03) * 5 + 5
+          Math.cos(wz * 0.05) * 3 +
+          Math.sin(wx * 0.03 + wz * 0.03) * 5 + 5
         );
 
         for (let y = 0; y <= height; y++) {
@@ -260,7 +266,7 @@ export interface ChunkData {
     return chunkData.blocks.get(blockKey) || null;
   }
 
-  getRaycastTarget(camera: THREE.Camera, raycaster: THREE.Raycaster): { block: Block; face: THREE.Vector3 } | null {
+  getRaycastTarget(raycaster: THREE.Raycaster): { block: Block; face: THREE.Vector3 } | null {
     const allMeshes: THREE.InstancedMesh[] = [];
 
     for (const [_, chunk] of this.chunks) {
@@ -295,13 +301,15 @@ export interface ChunkData {
               z: Math.round(position.z),
               type: actualBlock.type,
             },
-            face: hit.face.normal,
+            face: hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0),
           };
         }
       }
 
       return null;
     }
+    return null;
+  }
 
   update(playerPosition: { x: number; z: number }) {
     const cx = Math.floor(playerPosition.x / CHUNK_SIZE);
@@ -325,7 +333,7 @@ export interface ChunkData {
 
       const keysToDelete: string[] = [];
 
-      this.chunks.forEach((chunk, key) => {
+      this.chunks.forEach((_, key) => {
         const [kx, kz] = key.split(',').map(Number);
         const dist = Math.max(Math.abs(kx - cx), Math.abs(kz - cz));
 
@@ -346,31 +354,6 @@ export interface ChunkData {
     }
 
     return { ...this.worldStats };
-  }
-        }
-      }
-
-      const keysToDelete: string[] = [];
-
-      this.chunks.forEach((chunk, key) => {
-        const [kx, kz] = key.split(',').map(Number);
-        const dist = Math.max(Math.abs(kx - cx), Math.abs(kz - cz));
-
-        if (dist > renderDist + 1) {
-          keysToDelete.push(key);
-        }
-      });
-
-      for (const key of keysToDelete) {
-        const chunk = this.chunks.get(key);
-
-        if (chunk && chunk.mesh) {
-          this.scene.remove(chunk.mesh);
-        }
-
-        this.chunks.delete(key);
-      }
-    }
   }
 
   getStats(): WorldStats {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Game as Game } from './chunkManager';
 import { Player } from './player';
-import { BLOCK_NAMES, BlockType, WORLD_SIZE } from './types';
+import { BLOCK_NAMES, BlockType, WORLD_SIZE, WorldStats } from './types';
 
 export class MyWorldGame {
   private scene: THREE.Scene;
@@ -90,7 +90,7 @@ export class MyWorldGame {
     if (!this.isRunning) return;
 
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
-    const target = this.chunkManager.getRaycastTarget(this.camera, this.raycaster);
+    const target = this.chunkManager.getRaycastTarget(this.raycaster);
 
     if (target) {
       const { block, face } = target;
@@ -105,8 +105,8 @@ export class MyWorldGame {
         const playerPos = this.player.getPosition();
         const distance = Math.sqrt(
           Math.pow(newX - playerPos.x, 2) +
-            Math.pow(newY - (playerPos.y + 0.9), 2) +
-            Math.pow(newZ - playerPos.z, 2)
+          Math.pow(newY - (playerPos.y + 0.9), 2) +
+          Math.pow(newZ - playerPos.z, 2)
         );
 
         if (distance > 1.5) {
