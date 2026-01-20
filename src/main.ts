@@ -69,9 +69,6 @@ export class MyWorldGame {
 
     window.addEventListener('resize', () => this.onWindowResize());
     document.addEventListener('mousedown', (e) => this.onMouseDown(e));
-
-    const loading = document.getElementById('loading');
-    if (loading) loading.style.display = 'none';
   }
 
   private setupUI() {
@@ -79,7 +76,13 @@ export class MyWorldGame {
     if (startBtn) {
       startBtn.addEventListener('click', () => {
         const instructions = document.getElementById('instructions');
-        if (instructions) instructions.style.display = 'none';
+        if (instructions) {
+          instructions.style.display = 'none';
+        }
+        const loading = document.getElementById('loading');
+        if (loading) {
+          loading.style.display = 'none';
+        }
         this.isRunning = true;
         document.body.requestPointerLock();
       });
